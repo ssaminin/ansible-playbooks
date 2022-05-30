@@ -1,0 +1,101 @@
+---
+
+- name: Updating package cache
+  hosts: all
+  become: yes
+  tasks:
+    - ansible.builtin.apt:
+        update_cache: yes
+      when: ansible_pkg_mgr == "apt"
+
+    - yum_repository:
+        name: epel
+        description: EPEL YUM repo
+        baseurl: https://download.fedoraproject.org/pub/epel/$releasever/$basearch/
+        gpgkey: https://download.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-$releasever
+      when: ansible_pkg_mgr == "yum"
+    - ansible.builtin.yum:
+        update_cache: yes
+      when: ansible_pkg_mgr == "yum"
+
+- name: Installing packages
+  hosts: all
+  become: yes
+  tasks:
+    - ansible.builtin.apt:
+        name:
+         - redis-server
+         - python3-redis
+        state: latest
+      when: ansible_pkg_mgr == "apt"
+    - ansible.builtin.systemd:
+        name: redis-server
+        enabled: no
+      when: ansible_pkg_mgr == "apt"
+    - ansible.builtin.yum:
+        name:
+         - redis
+         - python3-redis
+        state: latest
+      when: ansible_pkg_mgr == "yum"
+    - ansible.posix.selinux:
+        policy: targeted
+        state: permissive
+      when: ansible_pkg_mgr == "yum"
+
+- name: Configuring master-slave instances
+  hosts: all
+  become: yes
+  tasks:
+    - name: Installing configuration files
+      copy: src=redis dest=/etc/
+
+    - name: Installing Systemd units
+      copy: src=system/ dest=/etc/systemd/system/
+
+    - name: Enabling and starting both instances
+      ansible.builtin.systemd:
+        name: 'redis@{{ item }}.service'
+        enabled: yes
+        state: restarted
+      loop:
+        - master
+        - slave
+
+- name: Reading and writing data to Redis
+  hosts: all 
+  tasks:
+    - name: Checking POST
+      uri:
+        url: http://xn--b1ameg9a.xn--p1ai/api/items
+        method: POST
+        body: '{"testkey":"new value"}'
+        body_format: json
+      register: json_response
+      failed_when: "'successfully set' not in json_response.content"
+    - name: Checking PUT
+      uri:
+        url: http://xn--b1ameg9a.xn--p1ai/api/items/testkey
+        method: PUT
+        body_format: form-urlencoded 
+        body: '{"new_value":"newer value"}' 
+        return_content: yes
+      register: json_response
+      failed_when: "'Successfully updated' not in json_response.content"
+    - name: Checking GET
+      uri:
+        url: http://xn--b1ameg9a.xn--p1ai/api/items/testkey
+        method: GET
+        return_content: yes
+      register: json_response
+      failed_when: "'newer' not in json_response.content"
+    - name: Checking DELETE
+      uri:
+        url: http://xn--b1ameg9a.xn--p1ai/api/items/testkey
+        method: DELETE
+        return_content: yes
+      register: json_response
+      failed_when: "'successfully deleted' not in json_response.content"
+
+
+
